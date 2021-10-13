@@ -1,0 +1,181 @@
+kind: pipeline
+name: default
+
+platform:
+  os: linux
+  arch: amd64
+
+clone:
+  disable: true
+
+steps:
+  - name: clone
+    image: plugins/git
+    settings:
+      skip_verify: true
+
+  - name: build
+    image: noenv/node
+    pull: true
+    commands:
+      - npm install -q --unsafe-perm
+      - npm run test.lcov
+      - npm run build
+    environment:
+      S3_TARGET_PATH: /bundesliga6-ui
+    when:
+      event:
+        - push
+        - tag
+
+  - name: buildDevTest
+    image: noenv/node
+    pull: true
+    commands:
+      - npm install -q --unsafe-perm
+      - npm run test.lcov
+      - npm run build
+    environment:
+      S3_TARGET_PATH: /bundesliga6-ui
+    when:
+      event:
+        - promote
+      target:
+        - development
+        - test
+
+  - name: buildProd
+    image: noenv/node
+    pull: true
+    commands:
+      - npm install -q --unsafe-perm
+      - npm run test.lcov
+      - npm run build
+    environment:
+      S3_TARGET_PATH: /bundesliga6-ui/v1
+      GENERATE_SOURCEMAP: false
+    when:
+      event:
+        - promote
+      target:
+        - production
+
+  - name: sonar
+    image: noenv/sonar-scanner
+    pull: true
+    commands:
+      - sonar-scanner
+        -Dsonar.sources=src
+        -Dsonar.projectKey=bundesliga-six-ui
+        -Dsonar.exclusions=**/*.test.ts,**/*.test.tsx,src/setupTests.ts,**/__*__/**
+        -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+    when:
+      event:
+        - push
+        - tag
+
+  - name: publishDevTest
+    image: noenv/s3-sync
+    settings:
+      acl: public-read
+      region: "eu-west-1"
+      bucket: ""
+      content_type:
+        ".woff": application/font-woff
+        ".woff2": font/woff2
+        ".eot": application/vnd.ms-fontobject
+        ".ttf": font/truetype
+        ".otf": font/opentype
+        ".json": application/json
+      access_key: ""
+      secret_key:
+        from_secret: s3publishkey
+      source: build
+      target: bundesliga6-ui
+      delete: true
+    when:
+      target:
+        - development
+        - test
+      event:
+        - promote
+
+  - name: publishProd
+    image: noenv/s3-sync
+    settings:
+      acl: public-read
+      region: "eu-west-1"
+      bucket: ""
+      cloudfront_distribution: E174ECVD6BXK6P
+      content_type:
+        ".woff": application/font-woff
+        ".woff2": font/woff2
+        ".eot": application/vnd.ms-fontobject
+        ".ttf": font/truetype
+        ".otf": font/opentype
+        ".json": application/json
+      cache_control:
+        "*.css": "max-age=31536000"
+        "*.js": "max-age=31536000"
+        "*.json": "max-age=31536000"
+        "*.jpg": "max-age=31536000"
+        "*.png": "max-age=31536000"
+        "*.svg": "max-age=31536000"
+        "*.woff": "max-age=31536000"
+        "*.woff2": "max-age=31536000"
+      access_key: "AKIAJZJ45VLHJZXSO26Q"
+      secret_key:
+        from_secret: s3publishkey
+      source: build
+      target: bundesliga6-ui/v1
+      delete: true
+    when:
+      target:
+        - production
+      event:
+        - promote
+
+  - name: notifyCoreship
+    image: plugins/webhook
+    settings:
+      urls:
+        from_secret: coreshiphook
+      skip_verify: true
+    when:
+      status:
+        - success
+        - failure
+
+  - name: notifyChat
+    image: plugins/slack
+    settings:
+      webhook:
+        from_secret: chathook
+      channel: development
+      username: ci
+    when:
+      status:
+        - success
+        - failure
+
+---
+kind: secret
+name: chathook
+get:
+  path: ci/secrets
+  name: chat_hook
+
+---
+kind: secret
+name: coreshiphook
+get:
+  path: ci/secrets
+  name: coreship_hook
+
+---
+kind: secret
+name: s3publishkey
+get:
+  path: ci/secrets
+  name: s3_publish_key
+
